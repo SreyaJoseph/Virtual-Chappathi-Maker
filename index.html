@@ -88,7 +88,6 @@
         function init() {
             // Scene
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x3d3d3d);
             clock = new THREE.Clock();
 
             // Camera
@@ -106,17 +105,40 @@
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
 
+            // --- Kitchen Environment ---
+            const textureLoader = new THREE.TextureLoader();
+            textureLoader.load(
+                'kitchen2.jpg', // A free to use equirectangular kitchen image
+                (texture) => {
+                    // texture.mapping = THREE.EquirectangularReflectionMapping; // Remove this line
+                    // scene.background = texture; // Remove this line
+                    // scene.environment = texture; // For realistic reflections on objects
+
+                    // Create a large sphere and map the texture to the inside
+                    const sphereGeometry = new THREE.SphereGeometry(50, 60, 40);
+                    const sphereMaterial = new THREE.MeshBasicMaterial({
+                        map: texture,
+                        side: THREE.BackSide // Render the texture on the inside
+                    });
+                    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                    scene.add(sphere);
+
+                    // Optionally, adjust environment lighting
+                    scene.environment = texture;
+                }
+            );
+
             // Lighting
-            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5)); // Reduced intensity as environment provides light
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
             dirLight.position.set(5, 10, 7);
             dirLight.castShadow = true;
             scene.add(dirLight);
 
-            // Ground
+            // Ground (Kitchen Counter)
             const groundMesh = new THREE.Mesh(
                 new THREE.PlaneGeometry(30, 30),
-                new THREE.MeshStandardMaterial({ color: '#555' })
+                new THREE.MeshStandardMaterial({ color: '#888', roughness: 0.1 })
             );
             groundMesh.rotation.x = -Math.PI / 2;
             groundMesh.receiveShadow = true;
@@ -143,6 +165,7 @@
             const material = new THREE.MeshStandardMaterial({
                 color: 0xF5DEB3,
                 roughness: 0.8,
+                metalness: 0.1 // Slight metalness to catch reflections
             });
             mainDough = new THREE.Mesh(geometry, material);
             mainDough.position.y = 2.5;
@@ -171,39 +194,33 @@
         }
 
         function rollDough(doughPortion) {
-            // FIX: Use CircleGeometry for a stable, round shape that works well with the raycaster.
             const rolledGeo = new THREE.CircleGeometry(1.5, 64);
 
-            // Create morph target for puffing up, adjusted for CircleGeometry
             const puffPositions = [];
             const pos = rolledGeo.attributes.position;
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i);
                 const y = pos.getY(i);
-                const z = pos.getZ(i); // z is always 0 for CircleGeometry
+                const z = pos.getZ(i);
                 const dist = Math.sqrt(x * x + y * y);
-                // Create a dome shape for the puff
                 const puffHeight = dist < 1.5 ? Math.cos(dist * Math.PI / 3.0) * 0.8 : 0;
-                puffPositions.push(x, y, puffHeight); // Add puff height to the Z coordinate
+                puffPositions.push(x, y, puffHeight);
             }
             rolledGeo.morphAttributes.position = [new THREE.Float32BufferAttribute(puffPositions, 3)];
 
-            // Create the mesh for the rolled chappathi
             const rolledMaterial = doughPortion.material.clone();
             const rolledChappathi = new THREE.Mesh(rolledGeo, rolledMaterial);
-            rolledChappathi.rotation.x = -Math.PI / 2; // Rotate to lay flat on the ground
+            rolledChappathi.rotation.x = -Math.PI / 2;
             rolledChappathi.position.copy(doughPortion.position);
-            rolledChappathi.position.y = 0.05; // Place it slightly above the ground
+            rolledChappathi.position.y = 0.05;
             rolledChappathi.castShadow = true;
             rolledChappathi.userData = { isRolled: true, cookProgress: 0 };
 
-            // Replace the old dough ball with the new chappathi
             const index = smallDoughPortions.indexOf(doughPortion);
             if(index > -1) smallDoughPortions.splice(index, 1);
             scene.remove(doughPortion);
             scene.add(rolledChappathi);
             
-            // Ensure the new chappathi is the currently hovered object for this frame
             hoveredObject = rolledChappathi;
         }
 
@@ -218,16 +235,14 @@
         }
 
         function onMouseDown(event) {
-            // If the mouse is over a draggable object, start dragging
             if (hoveredObject && hoveredObject.userData.isDraggable) {
                 draggedObject = hoveredObject;
-                controls.enabled = false; // Disable camera controls while dragging
+                controls.enabled = false;
                 dragJustStarted = true;
             }
         }
 
         function onMouseUp(event) {
-             // If we just clicked the main dough without dragging, divide it
             if (dragJustStarted && draggedObject && draggedObject.userData.isMainDough) {
                 const intersectPoint = new THREE.Vector3();
                 raycaster.ray.intersectPlane(groundPlane, intersectPoint);
@@ -235,9 +250,8 @@
                     divideDough(intersectPoint);
                 }
             }
-            // Stop dragging
             draggedObject = null;
-            controls.enabled = true; // Re-enable camera controls
+            controls.enabled = true;
         }
 
         function onWindowResize() {
@@ -254,21 +268,17 @@
             raycaster.setFromCamera(mouse, camera);
 
             if (draggedObject) {
-                // Move the dragged object along the ground plane
                 const intersectPoint = new THREE.Vector3();
                 raycaster.ray.intersectPlane(groundPlane, intersectPoint);
                 if (intersectPoint) {
-                    // Set the height based on the object type
                     const yPos = draggedObject.userData.isMainDough ? 2.5 : 0.5;
                     draggedObject.position.set(intersectPoint.x, yPos, intersectPoint.z);
                 }
             } else {
-                // Find hovered object only when not dragging
                 const intersects = raycaster.intersectObjects(scene.children);
                 hoveredObject = (intersects.length > 0) ? intersects[0].object : null;
             }
 
-            // --- Handle Long Press Actions ---
             if (keyState['KeyW'] && mainDough) {
                 const scaleFactor = 1.0 + Math.sin(elapsedTime * 10) * 0.05;
                 mainDough.scale.set(scaleFactor, 1 / scaleFactor, scaleFactor);
