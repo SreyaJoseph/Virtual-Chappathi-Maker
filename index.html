@@ -108,13 +108,9 @@
             // --- Kitchen Environment ---
             const textureLoader = new THREE.TextureLoader();
             textureLoader.load(
-                'kitchen2.jpg', // A free to use equirectangular kitchen image
+                'kitchen2.jpg', 
                 (texture) => {
-                    // texture.mapping = THREE.EquirectangularReflectionMapping; // Remove this line
-                    // scene.background = texture; // Remove this line
-                    // scene.environment = texture; // For realistic reflections on objects
-
-                    // Create a large sphere and map the texture to the inside
+                    
                     const sphereGeometry = new THREE.SphereGeometry(50, 60, 40);
                     const sphereMaterial = new THREE.MeshBasicMaterial({
                         map: texture,
@@ -123,7 +119,7 @@
                     const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
                     scene.add(sphere);
 
-                    // Optionally, adjust environment lighting
+                    
                     scene.environment = texture;
                 }
             );
