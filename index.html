@@ -53,8 +53,9 @@
     <div id="instructions">
         <h2>Controls</h2>
         <ul>
+            <li><b>Move Dough:</b> Click & Drag any dough ball</li>
+            <li><b>Divide:</b> Quick-click the main dough ball</li>
             <li><b>Knead:</b> Hold <code>W</code></li>
-            <li><b>Divide:</b> Click on the main dough ball</li>
             <li><b>Roll:</b> Hover a small ball + Hold <code>A</code></li>
             <li><b>Spread:</b> Hover a chappathi + Hold <code>D</code></li>
             <li><b>Cook:</b> Hover a chappathi + Hold <code>S</code></li>
@@ -76,10 +77,12 @@
 
         // --- CORE SETUP ---
         let scene, camera, renderer, controls, clock, raycaster;
-        let mainDough, hoveredObject;
+        let mainDough, hoveredObject, draggedObject;
         const smallDoughPortions = [];
         const mouse = new THREE.Vector2();
         const keyState = {}; // To track long presses
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        let dragJustStarted = false;
 
         // --- INITIALIZE THE SCENE ---
         function init() {
@@ -111,13 +114,13 @@
             scene.add(dirLight);
 
             // Ground
-            const ground = new THREE.Mesh(
+            const groundMesh = new THREE.Mesh(
                 new THREE.PlaneGeometry(30, 30),
                 new THREE.MeshStandardMaterial({ color: '#555' })
             );
-            ground.rotation.x = -Math.PI / 2;
-            ground.receiveShadow = true;
-            scene.add(ground);
+            groundMesh.rotation.x = -Math.PI / 2;
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
 
             // Raycaster for mouse interaction
             raycaster = new THREE.Raycaster();
@@ -131,6 +134,7 @@
             document.addEventListener('keyup', onKeyUp);
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mouseup', onMouseUp);
         }
 
         // --- CREATE MODELS ---
@@ -143,68 +147,63 @@
             mainDough = new THREE.Mesh(geometry, material);
             mainDough.position.y = 2.5;
             mainDough.castShadow = true;
-            mainDough.userData.isMainDough = true; // For identification
+            mainDough.userData.isMainDough = true;
+            mainDough.userData.isDraggable = true;
             scene.add(mainDough);
         }
 
         function divideDough(clickPosition) {
-            if (mainDough.scale.x < 0.3) return; // Stop dividing if too small
+            if (mainDough.scale.x < 0.3) return;
 
-            // Shrink the main dough
             mainDough.scale.multiplyScalar(0.95);
 
-            // Create a new small portion
             const geometry = new THREE.SphereGeometry(0.5, 32, 32);
             const material = mainDough.material.clone();
             const smallPortion = new THREE.Mesh(geometry, material);
             
-            // Place it near the click position on the ground
             smallPortion.position.set(clickPosition.x, 0.5, clickPosition.z);
             smallPortion.castShadow = true;
-            smallPortion.userData.isSmallDough = true; // For identification
+            smallPortion.userData.isSmallDough = true;
+            smallPortion.userData.isDraggable = true;
 
             scene.add(smallPortion);
             smallDoughPortions.push(smallPortion);
         }
 
         function rollDough(doughPortion) {
-            // Create the rolled chappathi geometry
-            const rolledGeo = new THREE.PlaneGeometry(3, 3, 64, 64);
-            const pos = rolledGeo.attributes.position;
-            const center = new THREE.Vector2(0, 0);
-            for (let i = 0; i < pos.count; i++) {
-                const v = new THREE.Vector2().fromBufferAttribute(pos, i);
-                if (v.distanceTo(center) > 1.5 + (Math.random() - 0.5) * 0.15) {
-                    pos.setZ(i, -Infinity); // Hide vertices outside the circle
-                }
-            }
+            // FIX: Use CircleGeometry for a stable, round shape that works well with the raycaster.
+            const rolledGeo = new THREE.CircleGeometry(1.5, 64);
 
-            // Create morph target for puffing up
+            // Create morph target for puffing up, adjusted for CircleGeometry
             const puffPositions = [];
+            const pos = rolledGeo.attributes.position;
             for (let i = 0; i < pos.count; i++) {
                 const x = pos.getX(i);
                 const y = pos.getY(i);
-                const z = pos.getZ(i);
+                const z = pos.getZ(i); // z is always 0 for CircleGeometry
                 const dist = Math.sqrt(x * x + y * y);
-                const puffHeight = dist < 1.4 ? Math.cos(dist * Math.PI / 2.8) * 0.8 : 0;
-                puffPositions.push(x, y, z + puffHeight);
+                // Create a dome shape for the puff
+                const puffHeight = dist < 1.5 ? Math.cos(dist * Math.PI / 3.0) * 0.8 : 0;
+                puffPositions.push(x, y, puffHeight); // Add puff height to the Z coordinate
             }
             rolledGeo.morphAttributes.position = [new THREE.Float32BufferAttribute(puffPositions, 3)];
 
-            // Create the mesh
+            // Create the mesh for the rolled chappathi
             const rolledMaterial = doughPortion.material.clone();
             const rolledChappathi = new THREE.Mesh(rolledGeo, rolledMaterial);
-            rolledChappathi.rotation.x = -Math.PI / 2;
+            rolledChappathi.rotation.x = -Math.PI / 2; // Rotate to lay flat on the ground
             rolledChappathi.position.copy(doughPortion.position);
-            rolledChappathi.position.y = 0.05; // Place it flat on the ground
+            rolledChappathi.position.y = 0.05; // Place it slightly above the ground
             rolledChappathi.castShadow = true;
             rolledChappathi.userData = { isRolled: true, cookProgress: 0 };
 
             // Replace the old dough ball with the new chappathi
+            const index = smallDoughPortions.indexOf(doughPortion);
+            if(index > -1) smallDoughPortions.splice(index, 1);
             scene.remove(doughPortion);
             scene.add(rolledChappathi);
             
-            // Update the hovered object to be the new chappathi
+            // Ensure the new chappathi is the currently hovered object for this frame
             hoveredObject = rolledChappathi;
         }
 
@@ -215,19 +214,30 @@
         function onMouseMove(event) {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            dragJustStarted = false;
         }
 
         function onMouseDown(event) {
-            // Check if the main dough was clicked
-            if (hoveredObject && hoveredObject.userData.isMainDough) {
-                // Use raycaster to find the exact point on the ground plane
-                const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-                raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
-                const intersectPoint = raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3());
+            // If the mouse is over a draggable object, start dragging
+            if (hoveredObject && hoveredObject.userData.isDraggable) {
+                draggedObject = hoveredObject;
+                controls.enabled = false; // Disable camera controls while dragging
+                dragJustStarted = true;
+            }
+        }
+
+        function onMouseUp(event) {
+             // If we just clicked the main dough without dragging, divide it
+            if (dragJustStarted && draggedObject && draggedObject.userData.isMainDough) {
+                const intersectPoint = new THREE.Vector3();
+                raycaster.ray.intersectPlane(groundPlane, intersectPoint);
                 if (intersectPoint) {
                     divideDough(intersectPoint);
                 }
             }
+            // Stop dragging
+            draggedObject = null;
+            controls.enabled = true; // Re-enable camera controls
         }
 
         function onWindowResize() {
@@ -241,41 +251,45 @@
             requestAnimationFrame(animate);
             const elapsedTime = clock.getElapsedTime();
 
-            // Update raycaster to find hovered object
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(scene.children);
-            hoveredObject = (intersects.length > 0) ? intersects[0].object : null;
 
-            // --- Handle Long Press Actions ---
-            // 1. Kneading (W key)
-            if (keyState['KeyW'] && mainDough) {
-                const scaleFactor = 1.0 + Math.sin(elapsedTime * 10) * 0.05;
-                mainDough.scale.set(scaleFactor, 1/scaleFactor, scaleFactor);
-            } else if (mainDough) {
-                 mainDough.scale.set(1, 1, 1); // Reset when not kneading
+            if (draggedObject) {
+                // Move the dragged object along the ground plane
+                const intersectPoint = new THREE.Vector3();
+                raycaster.ray.intersectPlane(groundPlane, intersectPoint);
+                if (intersectPoint) {
+                    // Set the height based on the object type
+                    const yPos = draggedObject.userData.isMainDough ? 2.5 : 0.5;
+                    draggedObject.position.set(intersectPoint.x, yPos, intersectPoint.z);
+                }
+            } else {
+                // Find hovered object only when not dragging
+                const intersects = raycaster.intersectObjects(scene.children);
+                hoveredObject = (intersects.length > 0) ? intersects[0].object : null;
             }
 
-            // 2. Rolling (A key)
+            // --- Handle Long Press Actions ---
+            if (keyState['KeyW'] && mainDough) {
+                const scaleFactor = 1.0 + Math.sin(elapsedTime * 10) * 0.05;
+                mainDough.scale.set(scaleFactor, 1 / scaleFactor, scaleFactor);
+            } else if (mainDough) {
+                 mainDough.scale.set(1, 1, 1);
+            }
+
             if (keyState['KeyA'] && hoveredObject && hoveredObject.userData.isSmallDough) {
                 rollDough(hoveredObject);
             }
 
-            // 3. Spreading (D key)
             if (keyState['KeyD'] && hoveredObject && hoveredObject.userData.isRolled) {
                 hoveredObject.scale.multiplyScalar(1.005);
             }
 
-            // 4. Cooking (S key)
             if (keyState['KeyS'] && hoveredObject && hoveredObject.userData.isRolled) {
                 let data = hoveredObject.userData;
                 if (data.cookProgress < 100) {
                     data.cookProgress += 0.5;
                     const progress = data.cookProgress / 100;
-                    
-                    // Puff up using morph target
                     hoveredObject.morphTargetInfluences[0] = Math.sin(progress * Math.PI);
-                    
-                    // Change color from raw to cooked
                     const rawColor = new THREE.Color(0xF5DEB3);
                     const cookedColor = new THREE.Color(0x9d6f3e);
                     hoveredObject.material.color.lerpColors(rawColor, cookedColor, progress);
